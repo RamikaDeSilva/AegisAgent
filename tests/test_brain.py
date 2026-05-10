@@ -474,7 +474,18 @@ class TestContractImports:
         assert callable(run_sqlmap)
         assert callable(run_nuclei)
 
-    def test_stream_3_callables_resolve(self):
+    def test_stream_3_callables_resolve(self, monkeypatch):
+        # integrations.greptile_client instantiates an AsyncOpenAI client at
+        # module-import time. The conftest fixture unsets OPENAI_API_KEY for
+        # hermetic Brain tests, so we set a placeholder here just to let the
+        # import succeed. No network call is ever made.
+        monkeypatch.setenv("OPENAI_API_KEY", "sk-test-placeholder")
+        import sys
+
+        for mod in list(sys.modules):
+            if mod.startswith("integrations."):
+                del sys.modules[mod]
+
         from integrations.github_client import (
             get_pr_diff,
             post_pending_status,

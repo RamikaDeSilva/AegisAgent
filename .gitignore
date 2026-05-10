@@ -20,9 +20,6 @@ venv/
 env/
 .env/
 
-# Test artifacts
-test_clients.py
-
 # IDE
 .DS_Store
 .vscode/

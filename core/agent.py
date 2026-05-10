@@ -12,6 +12,7 @@ import json
 from typing import TYPE_CHECKING, Any
 
 from pydantic import BaseModel
+from rich.console import Console
 from langgraph.graph import StateGraph, START, END
 
 if TYPE_CHECKING:
@@ -168,16 +169,26 @@ class AegisAgent:
       LLM prompt iteration with pre-populated state.
     """
 
-    def __init__(self, deps: "BrainDeps") -> None:
+    def __init__(self, deps: "BrainDeps", log: bool = True) -> None:
         self.deps = deps
+        self._console = Console(quiet=not log)
         self._live_graph = self._build_live_graph()
         self._mock_graph = self._build_mock_graph()
+
+    def _log_node(self, name: str, message: str) -> None:
+        """Emit a single rich-formatted line announcing the node's intent.
+
+        Tied to the ``log`` constructor flag via ``Console(quiet=...)`` so
+        pytest stays clean while CLI runs are legible to demo viewers.
+        """
+        self._console.log(f"[bold cyan]\u2192 {name}[/bold cyan] {message}")
 
     # ------------------------------------------------------------------
     # Nodes
     # ------------------------------------------------------------------
 
     async def _node_post_pending(self, state: PRScanState) -> dict:
+        self._log_node("post_pending", f"posting placeholder to {state.pr_url}")
         comment_id = await self.deps.post_pending_status(state.pr_url)
         return {
             "pending_comment_id": comment_id,
@@ -185,16 +196,23 @@ class AegisAgent:
         }
 
     async def _node_fetch_diff(self, state: PRScanState) -> dict:
+        self._log_node("fetch_diff", f"fetching unified diff for {state.pr_url}")
         diff = await self.deps.get_pr_diff(state.pr_url)
         return {"diff_text": diff}
 
     async def _node_classify_db(self, state: PRScanState) -> dict:
+        self._log_node(
+            "classify_db", f"asking Greptile if {state.repo_name} touches the DB"
+        )
         impacted = await self.deps.analyze_diff_for_db_impact(
             state.repo_name or "", state.diff_text or ""
         )
         return {"db_impacted": impacted}
 
     async def _node_early_exit_no_db(self, state: PRScanState) -> dict:
+        self._log_node(
+            "early_exit_no_db", "no DB impact detected; closing out the comment"
+        )
         body = (
             "## AegisAgent\n\n"
             "No database-impacting changes detected in this PR. "
@@ -205,12 +223,19 @@ class AegisAgent:
         return {"simplified_report": body}
 
     async def _node_fetch_waf(self, state: PRScanState) -> dict:
+        self._log_node(
+            "fetch_waf", f"asking Nia for WAF bypasses for {state.tech_stack}"
+        )
         bypasses = await self.deps.get_waf_bypasses(state.tech_stack or "")
         return {"waf_bypasses": bypasses}
 
     async def _node_run_scans(self, state: PRScanState) -> dict:
         tamper = ",".join(state.waf_bypasses) if state.waf_bypasses else None
         target = state.target_url or ""
+        self._log_node(
+            "run_scans",
+            f"sqlmap + nuclei against {target} (tamper={tamper or 'none'})",
+        )
         sqlmap_task = self.deps.run_sqlmap(target, tamper)
         nuclei_task = self.deps.run_nuclei(target)
         sqlmap_result, nuclei_result = await asyncio.gather(
@@ -228,13 +253,25 @@ class AegisAgent:
             and bool(sqlmap.get("findings"))
         )
         if has_findings and state.bounty_wallet:
+            self._log_node(
+                "bounty_payout",
+                f"findings confirmed; triggering AllScale payout to {state.bounty_wallet}",
+            )
             paid = await self.deps.trigger_bounty_payout(
                 state.bounty_wallet, state.bounty_amount
             )
             return {"bounty_paid": paid}
+        self._log_node(
+            "bounty_payout",
+            f"skipping payout (findings={bool(has_findings)}, wallet={bool(state.bounty_wallet)})",
+        )
         return {"bounty_paid": False}
 
     async def _node_simplify_and_post(self, state: PRScanState) -> dict:
+        self._log_node(
+            "simplify_and_post",
+            "asking the LLM to summarise scan output, then editing the PR comment",
+        )
         combined = {
             "status": _aggregate_status(state.sqlmap_result, state.nuclei_result),
             "sqlmap": state.sqlmap_result,

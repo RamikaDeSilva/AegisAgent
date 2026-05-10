@@ -9,10 +9,12 @@ packages. Everything else inside ``core/`` depends on the ``BrainDeps``
 abstraction below — keeping Brain decoupled from the concrete implementations
 in ``tools/`` and ``integrations/``.
 
-Why this matters: while Streams 2 and 3 are still scaffolded with ``pass``,
-``build_mock_deps()`` lets the agent run end-to-end without ever importing
-their modules. That makes prompt iteration possible today and removes any
-chance of accidentally coupling Brain to half-finished teammate code.
+Three factories are provided:
+
+* ``build_live_deps()`` — real Stream 2 + real Stream 3. Production.
+* ``build_mock_deps()`` — inline stubs for both. Strict-isolation testing.
+* ``build_partial_deps()`` — real Stream 3 + mocked Stream 2. Useful while
+  Stream 2 (the Muscle stream) is still WIP but Stream 3 has shipped.
 """
 
 from __future__ import annotations
@@ -35,9 +37,9 @@ class BrainDeps:
     """Bundle of every external callable the Brain stream depends on.
 
     The agent constructor takes a single ``BrainDeps`` instance. Real wiring
-    happens in ``build_live_deps`` (production) or ``build_mock_deps``
-    (``--mock`` runs); the agent itself never imports from ``tools.*`` or
-    ``integrations.*``.
+    happens in ``build_live_deps`` (production), ``build_mock_deps`` (strict
+    isolation), or ``build_partial_deps`` (real Stream 3, mocked Stream 2).
+    The agent itself never imports from ``tools.*`` or ``integrations.*``.
     """
 
     # GitHub (Stream 3)
@@ -63,7 +65,7 @@ class BrainDeps:
 
 
 # ---------------------------------------------------------------------------
-# LLM builder (shared by live + mock)
+# LLM builder (shared by all three factories)
 # ---------------------------------------------------------------------------
 
 
@@ -107,6 +109,84 @@ def _build_llm() -> "BaseChatModel":
 
 
 # ---------------------------------------------------------------------------
+# Default canned scanner outputs
+# ---------------------------------------------------------------------------
+
+
+def _default_sqlmap_success(target: str, tamper: str | None) -> dict:
+    return {
+        "status": "success",
+        "target": target,
+        "stdout": (
+            "[INFO] testing connection to the target URL\n"
+            "Parameter: q (GET)\n"
+            "  Type: boolean-based blind\n"
+            "  Title: AND boolean-based blind - WHERE or HAVING clause\n"
+            "  Payload: q=test' AND 1=1-- -\n"
+            "  DBMS: PostgreSQL\n"
+        ),
+        "stderr": "",
+        "findings": [
+            {
+                "parameter": "q",
+                "type": "boolean-based blind",
+                "dbms": "PostgreSQL",
+                "tamper": tamper,
+            }
+        ],
+    }
+
+
+def _default_nuclei_success(target: str) -> dict:
+    return {
+        "status": "success",
+        "target": target,
+        "stdout": "[INFO] no critical templates matched\n",
+        "stderr": "",
+        "findings": [],
+    }
+
+
+# ---------------------------------------------------------------------------
+# Mock scanner builders (shared by mock + partial deps)
+# ---------------------------------------------------------------------------
+
+
+def _make_mock_run_sqlmap(
+    sqlmap_result: dict | None,
+) -> Callable[[str, str | None], Awaitable[dict]]:
+    """Build a stub ``run_sqlmap`` that returns ``sqlmap_result`` verbatim
+    (or a default success dict if the override is None)."""
+
+    async def mock_run_sqlmap(
+        target_url: str, tamper_script: str | None = None
+    ) -> dict:
+        if sqlmap_result is not None:
+            result = dict(sqlmap_result)
+            result.setdefault("target", target_url)
+            return result
+        return _default_sqlmap_success(target_url, tamper_script)
+
+    return mock_run_sqlmap
+
+
+def _make_mock_run_nuclei(
+    nuclei_result: dict | None,
+) -> Callable[[str], Awaitable[dict]]:
+    """Build a stub ``run_nuclei`` that returns ``nuclei_result`` verbatim
+    (or a default success dict if the override is None)."""
+
+    async def mock_run_nuclei(target_url: str) -> dict:
+        if nuclei_result is not None:
+            result = dict(nuclei_result)
+            result.setdefault("target", target_url)
+            return result
+        return _default_nuclei_success(target_url)
+
+    return mock_run_nuclei
+
+
+# ---------------------------------------------------------------------------
 # Live wiring
 # ---------------------------------------------------------------------------
 
@@ -147,20 +227,40 @@ def build_live_deps() -> BrainDeps:
 # ---------------------------------------------------------------------------
 
 
-def build_mock_deps() -> BrainDeps:
-    """Wire BrainDeps to inline async stubs.
+def build_mock_deps(
+    *,
+    sqlmap_result: dict | None = None,
+    nuclei_result: dict | None = None,
+    db_impacted: bool = True,
+    quiet: bool = False,
+) -> BrainDeps:
+    """Wire BrainDeps to inline async stubs for both Stream 2 and Stream 3.
 
-    Used by ``python main.py --mock``. Returns canned data so the LLM
-    prompt can be iterated on without hitting GitHub, Greptile, Nia,
-    AllScale, sqlmap, or nuclei. The LLM itself stays real because that
-    is the artifact under iteration.
+    Used by ``python main.py --mock`` and the pytest suite. Returns canned
+    data so the LLM prompt can be iterated on without hitting GitHub,
+    Greptile, Nia, AllScale, sqlmap, or nuclei.
+
+    Args:
+        sqlmap_result: If set, overrides the default vulnerable sqlmap dict.
+            Used by scenarios like ``timeout`` / ``error`` / ``clean``.
+        nuclei_result: Same idea for nuclei.
+        db_impacted: What the mocked Greptile node returns. Set to False to
+            exercise the ``early_exit_no_db`` branch in the live graph.
+        quiet: If True, suppress the rich console logging from the stubs.
+            Tests pass quiet=True to keep pytest output clean.
     """
     from rich.console import Console
 
-    console = Console()
+    console = Console(quiet=quiet)
 
     async def mock_get_pr_diff(pr_url: str) -> str:
-        return "<mocked unified diff>"
+        return (
+            "--- a/app/routes/products.py\n"
+            "+++ b/app/routes/products.py\n"
+            "@@ -14,7 +14,7 @@\n"
+            "-    results = db.execute(\"SELECT * FROM products\").fetchall()\n"
+            "+    results = db.execute(f\"SELECT * FROM products WHERE name = '{q}'\").fetchall()\n"
+        )
 
     async def mock_post_pending_status(pr_url: str) -> int:
         console.log(f"[mock] post_pending_status({pr_url}) -> 1")
@@ -173,7 +273,7 @@ def build_mock_deps() -> BrainDeps:
         return True
 
     async def mock_analyze_diff_for_db_impact(repo: str, diff: str) -> bool:
-        return True
+        return db_impacted
 
     async def mock_get_waf_bypasses(tech_stack: str) -> list[str]:
         return ["space2comment", "between"]
@@ -184,40 +284,6 @@ def build_mock_deps() -> BrainDeps:
         )
         return True
 
-    async def mock_run_sqlmap(
-        target_url: str, tamper_script: str | None = None
-    ) -> dict:
-        return {
-            "status": "success",
-            "target": target_url,
-            "stdout": (
-                "[INFO] testing connection to the target URL\n"
-                "Parameter: q (GET)\n"
-                "  Type: boolean-based blind\n"
-                "  Title: AND boolean-based blind - WHERE or HAVING clause\n"
-                "  Payload: q=test' AND 1=1-- -\n"
-                "  DBMS: PostgreSQL\n"
-            ),
-            "stderr": "",
-            "findings": [
-                {
-                    "parameter": "q",
-                    "type": "boolean-based blind",
-                    "dbms": "PostgreSQL",
-                    "tamper": tamper_script,
-                }
-            ],
-        }
-
-    async def mock_run_nuclei(target_url: str) -> dict:
-        return {
-            "status": "success",
-            "target": target_url,
-            "stdout": "[INFO] no critical templates matched\n",
-            "stderr": "",
-            "findings": [],
-        }
-
     return BrainDeps(
         get_pr_diff=mock_get_pr_diff,
         post_pending_status=mock_post_pending_status,
@@ -225,7 +291,54 @@ def build_mock_deps() -> BrainDeps:
         analyze_diff_for_db_impact=mock_analyze_diff_for_db_impact,
         get_waf_bypasses=mock_get_waf_bypasses,
         trigger_bounty_payout=mock_trigger_bounty_payout,
-        run_sqlmap=mock_run_sqlmap,
-        run_nuclei=mock_run_nuclei,
+        run_sqlmap=_make_mock_run_sqlmap(sqlmap_result),
+        run_nuclei=_make_mock_run_nuclei(nuclei_result),
+        llm=_build_llm(),
+    )
+
+
+# ---------------------------------------------------------------------------
+# Partial wiring (real Stream 3, mocked Stream 2)
+# ---------------------------------------------------------------------------
+
+
+def build_partial_deps(
+    *,
+    sqlmap_result: dict | None = None,
+    nuclei_result: dict | None = None,
+) -> BrainDeps:
+    """Wire BrainDeps to real Stream 3 + mocked Stream 2 scanners.
+
+    Use this while the Muscle stream (sqlmap / nuclei wrappers) is still
+    WIP but the Context stream (GitHub / Greptile / Nia / AllScale) has
+    shipped. Lets you run Brain's full 8-node live graph against real
+    sponsor APIs without needing the scanner binaries to exist.
+
+    Triggered from the CLI via
+    ``python main.py --pr <url> --mock-scanners``. Requires real API keys
+    in ``.env`` for GitHub, Greptile, Nia, AllScale, and OpenAI.
+
+    Args:
+        sqlmap_result: Optional override for the sqlmap stub's return dict.
+        nuclei_result: Optional override for the nuclei stub's return dict.
+    """
+    from integrations.github_client import (
+        get_pr_diff,
+        post_pending_status,
+        update_pr_comment,
+    )
+    from integrations.greptile_client import analyze_diff_for_db_impact
+    from integrations.nia_client import get_waf_bypasses
+    from integrations.allscale_client import trigger_bounty_payout
+
+    return BrainDeps(
+        get_pr_diff=get_pr_diff,
+        post_pending_status=post_pending_status,
+        update_pr_comment=update_pr_comment,
+        analyze_diff_for_db_impact=analyze_diff_for_db_impact,
+        get_waf_bypasses=get_waf_bypasses,
+        trigger_bounty_payout=trigger_bounty_payout,
+        run_sqlmap=_make_mock_run_sqlmap(sqlmap_result),
+        run_nuclei=_make_mock_run_nuclei(nuclei_result),
         llm=_build_llm(),
     )

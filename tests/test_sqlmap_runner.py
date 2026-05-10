@@ -17,8 +17,9 @@ back-end DBMS: MySQL >= 5.0
 """
 
 
-def make_proc(stdout=b"", stderr=b"", timeout=False):
+def make_proc(stdout=b"", stderr=b"", timeout=False, returncode=0):
     proc = MagicMock()
+    proc.returncode = returncode
     if timeout:
         async def _communicate():
             raise asyncio.TimeoutError()
@@ -95,7 +96,7 @@ async def test_timeout_path():
         "status": "timeout",
         "target": URL,
         "stdout": "",
-        "stderr": "killed after 1800s",
+        "stderr": "killed after 60s",
     }
     proc.terminate.assert_called_once()
 
@@ -118,3 +119,22 @@ async def test_no_findings_when_clean_output():
         result = await run_sqlmap(URL)
     assert result["status"] == "success"
     assert result["findings"] == []
+
+
+@pytest.mark.asyncio
+async def test_nonzero_exit_without_findings_returns_error():
+    proc = make_proc(stdout=b"[ERROR] connection refused", returncode=1)
+    with patch("tools.sqlmap_runner.asyncio.create_subprocess_exec", AsyncMock(return_value=proc)):
+        result = await run_sqlmap(URL)
+    assert result["status"] == "error"
+    assert result["target"] == URL
+
+
+@pytest.mark.asyncio
+async def test_nonzero_exit_with_findings_returns_success():
+    # Non-zero exit but findings were parsed — treat as success (partial run)
+    proc = make_proc(stdout=SQLMAP_FINDING_OUTPUT.encode(), returncode=1)
+    with patch("tools.sqlmap_runner.asyncio.create_subprocess_exec", AsyncMock(return_value=proc)):
+        result = await run_sqlmap(URL)
+    assert result["status"] == "success"
+    assert len(result["findings"]) > 0

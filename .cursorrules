@@ -1,0 +1,59 @@
+# AegisAgent — Cursor Project Rules
+
+## Project Overview
+
+AegisAgent is an autonomous AI Red-Team agent that analyzes GitHub Pull Requests
+for database vulnerabilities. It competes in three sponsor tracks:
+  - Greptile  — diff classification (does this PR touch DB code?)
+  - Nia       — WAF bypass intelligence (how do we get past the firewall?)
+  - AllScale  — automated bounty payouts (pay out when a vuln is confirmed)
+
+## Core User Flow
+
+```
+PR Created
+  → Agent fetches diff (github_client)
+  → Greptile classifies: DB touched? (greptile_client)
+  → If yes: Nia returns WAF bypass strategies (nia_client)
+  → sqlmap / nuclei scan the endpoint (tools/)
+  → LLM simplifies raw scan output (core/agent.py)
+  → AllScale triggers bounty payout (allscale_client)
+  → Agent edits the pending PR comment with final results (github_client)
+```
+
+## MANDATORY: Read docs/ Before Writing Code
+
+Before editing ANY file in this project, read the relevant guide in docs/:
+
+  - docs/stream_1_brain.md   → core/agent.py, main.py
+  - docs/stream_2_muscle.md  → tools/
+  - docs/stream_3_context.md → integrations/
+
+These docs define the exact API contracts between streams. Violating them
+will cause merge conflicts and break other team members' work.
+
+## File Ownership Map (DO NOT cross streams)
+
+| Stream       | Owner files                  | Must NOT edit               |
+|--------------|------------------------------|-----------------------------|
+| Brain        | core/agent.py, main.py       | tools/, integrations/       |
+| Muscle       | tools/                       | core/, integrations/        |
+| Context      | integrations/                | core/, tools/, main.py      |
+
+## Shared State Contract
+
+All data flowing between LangChain/LangGraph nodes must be passed as a
+`PRScanState` (Pydantic BaseModel defined in core/agent.py). Never pass
+raw dicts between nodes. The full field list is in core/agent.py.
+
+## Key Invariants
+
+1. Every sqlmap/nuclei subprocess MUST use asyncio.wait_for(timeout=60).
+   On TimeoutError, return {"status": "timeout", ...} — never raise.
+
+2. The GitHub bot posts ONE comment immediately (post_pending_status) and
+   then edits that same comment at the end (update_pr_comment). Never
+   post multiple bot comments on a single PR.
+
+3. Use python main.py --mock for all local dev loops. Never hit the live
+   GitHub or Greptile API during prompt iteration.

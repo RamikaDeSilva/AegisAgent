@@ -1,0 +1,7 @@
+langchain
+langchain-openai
+pydantic
+python-dotenv
+rich
+httpx
+PyGithub

@@ -59,11 +59,47 @@ _retry = retry(
 
 
 # ---------------------------------------------------------------------------
-# Public interface
+# Internal classifier — raises freely so @_retry can observe exceptions
 # ---------------------------------------------------------------------------
 
 
 @_retry
+async def _classify(repo_name: str, diff_text: str) -> bool:
+    """
+    Make the OpenAI call and return the YES/NO result.
+
+    Decorated with @_retry so tenacity can see and retry on RateLimitError,
+    APIConnectionError, and APITimeoutError. Must NOT catch exceptions here —
+    the public wrapper below handles the final fallback.
+    """
+    response = await _openai_client.chat.completions.create(
+        model="gpt-4o-mini",
+        messages=[
+            {
+                "role": "system",
+                "content": "You are a security reviewer. Respond ONLY with 'YES' or 'NO'.",
+            },
+            {
+                "role": "user",
+                "content": (
+                    f"Does this diff touch DB code (SQL, ORM, migrations)?\n"
+                    f"Repo: {repo_name}\n\n"
+                    f"{diff_text[:_MAX_DIFF_CHARS]}"
+                ),
+            },
+        ],
+        max_tokens=5,
+        temperature=0,
+    )
+    answer = response.choices[0].message.content.strip().upper()
+    return answer.startswith("YES")
+
+
+# ---------------------------------------------------------------------------
+# Public interface
+# ---------------------------------------------------------------------------
+
+
 async def analyze_diff_for_db_impact(repo_name: str, diff_text: str) -> bool:
     """
     Classify whether a PR diff touches database code.
@@ -87,27 +123,7 @@ async def analyze_diff_for_db_impact(repo_name: str, diff_text: str) -> bool:
         False otherwise.
     """
     try:
-        response = await _openai_client.chat.completions.create(
-            model="gpt-4o-mini",
-            messages=[
-                {
-                    "role": "system",
-                    "content": "You are a security reviewer. Respond ONLY with 'YES' or 'NO'.",
-                },
-                {
-                    "role": "user",
-                    "content": (
-                        f"Does this diff touch DB code (SQL, ORM, migrations)?\n"
-                        f"Repo: {repo_name}\n\n"
-                        f"{diff_text[:_MAX_DIFF_CHARS]}"
-                    ),
-                },
-            ],
-            max_tokens=5,
-            temperature=0,
-        )
-        answer = response.choices[0].message.content.strip().upper()
-        return answer.startswith("YES")
+        return await _classify(repo_name, diff_text)
     except Exception:
         logger.exception(
             "Classification failed for %s. Defaulting to False.", repo_name

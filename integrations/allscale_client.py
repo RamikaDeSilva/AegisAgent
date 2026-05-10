@@ -131,18 +131,25 @@ async def trigger_bounty_payout(wallet_address: str, amount: float) -> bool:
         # Minimum is 0.1 USDC (10 cents); floor at 11 cents to stay above limit.
         amount_cents = max(int(amount * 100), 11)
 
+        # order_id includes a unix timestamp so repeated payouts to the same
+        # wallet address never collide — a static prefix alone would be rejected.
+        order_id = f"aegis-{wallet_address[:8]}-{int(time.time())}"
+
         body_payload = {
             "stable_coin": 2,           # 2 = USDC per AllScale StableCoin enum
             "amount_cents": amount_cents,
-            "order_id": f"aegis-bounty-{wallet_address[:8]}",
+            "order_id": order_id,
             "order_description": f"AegisAgent vulnerability bounty payout to {wallet_address}",
             "user_id": wallet_address,
         }
         body_str = json.dumps(body_payload, separators=(",", ":"))
-        headers = _sign_request("POST", path, body_str)
 
         @_retry
         async def _post() -> bool:
+            # _sign_request is called inside the retry loop so each attempt
+            # gets a fresh timestamp and nonce — stale values are rejected by
+            # AllScale's replay-protection (±5 min window, nonces single-use).
+            headers = _sign_request("POST", path, body_str)
             async with httpx.AsyncClient(timeout=30) as client:
                 resp = await client.post(
                     f"{_ALLSCALE_API}{path}",

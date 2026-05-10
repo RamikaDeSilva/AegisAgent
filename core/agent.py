@@ -138,6 +138,22 @@ def _extract_text(response: Any) -> str:
     return str(content)
 
 
+_EXTRACT_CONTEXT_SYSTEM_PROMPT = (
+    "You are a security engineer analyzing a git diff. "
+    "Extract two pieces of information and return ONLY a valid JSON object "
+    "(no markdown fences, no extra text):\n"
+    '{"tech_stack": "<string>", "target_url": "<string or null>"}\n\n'
+    "tech_stack: the web framework + database combination inferred from import "
+    "statements, ORM usage, or migration filenames. Use lowercase hyphen-separated "
+    "format, e.g. 'python-fastapi-postgres', 'node-express-mysql', "
+    "'ruby-rails-sqlite', 'python-django-postgres'.\n\n"
+    "target_url: if the diff modifies a specific HTTP endpoint, return its path "
+    "including any query parameter that receives user input "
+    "(e.g. '/api/products/search?q='). Look for route decorators "
+    "(@app.get, @router.post, @app.route), Django urls.py patterns, Express "
+    "router.get/post calls, etc. Return null if no clear endpoint is identifiable."
+)
+
 _SIMPLIFY_SYSTEM_PROMPT = (
     "You are a senior security engineer. Translate raw sqlmap and nuclei scan "
     "output into a concise Markdown comment for a Pull Request author who has "
@@ -204,6 +220,45 @@ class AegisAgent:
             await self.deps.update_pr_comment(state.pending_comment_id, body)
         return {"simplified_report": body}
 
+    async def _node_extract_context(self, state: PRScanState) -> dict:
+        """Use the LLM to extract tech_stack and target_url from the diff.
+
+        Runs after classify_db on the DB-impacted path, before fetch_waf and
+        run_scans. Only populates fields that are still None — an operator-
+        supplied TARGET_URL (seeded into initial state from the env) is never
+        overwritten.
+        """
+        from langchain_core.messages import HumanMessage, SystemMessage
+
+        diff = (state.diff_text or "")[:8_000]
+        messages = [
+            SystemMessage(content=_EXTRACT_CONTEXT_SYSTEM_PROMPT),
+            HumanMessage(
+                content=f"Repo: {state.repo_name or 'unknown'}\n\nDiff:\n{diff}"
+            ),
+        ]
+        updates: dict = {}
+        try:
+            response = await self.deps.llm.ainvoke(messages)
+            text = _extract_text(response).strip()
+            # Strip markdown code fences in case the LLM adds them anyway
+            if text.startswith("```"):
+                text = text.split("```")[1]
+                if text.startswith("json"):
+                    text = text[4:]
+            data = json.loads(text.strip())
+
+            if not state.tech_stack and data.get("tech_stack"):
+                updates["tech_stack"] = str(data["tech_stack"])
+            if not state.target_url and data.get("target_url"):
+                updates["target_url"] = str(data["target_url"])
+        except Exception:
+            logger.exception(
+                "Context extraction failed for %s; continuing with partial state.",
+                state.repo_name,
+            )
+        return updates
+
     async def _node_fetch_waf(self, state: PRScanState) -> dict:
         bypasses = await self.deps.get_waf_bypasses(state.tech_stack or "")
         return {"waf_bypasses": bypasses}
@@ -253,7 +308,7 @@ class AegisAgent:
     # ------------------------------------------------------------------
 
     def _route_after_classify(self, state: PRScanState) -> str:
-        return "fetch_waf" if state.db_impacted else "early_exit_no_db"
+        return "extract_context" if state.db_impacted else "early_exit_no_db"
 
     # ------------------------------------------------------------------
     # Graph builders
@@ -265,6 +320,7 @@ class AegisAgent:
         g.add_node("fetch_diff", self._node_fetch_diff)
         g.add_node("classify_db", self._node_classify_db)
         g.add_node("early_exit_no_db", self._node_early_exit_no_db)
+        g.add_node("extract_context", self._node_extract_context)
         g.add_node("fetch_waf", self._node_fetch_waf)
         g.add_node("run_scans", self._node_run_scans)
         g.add_node("bounty_payout", self._node_bounty)
@@ -277,10 +333,11 @@ class AegisAgent:
             "classify_db",
             self._route_after_classify,
             {
-                "fetch_waf": "fetch_waf",
+                "extract_context": "extract_context",
                 "early_exit_no_db": "early_exit_no_db",
             },
         )
+        g.add_edge("extract_context", "fetch_waf")
         g.add_edge("fetch_waf", "run_scans")
         g.add_edge("run_scans", "bounty_payout")
         g.add_edge("bounty_payout", "simplify_and_post")
@@ -342,6 +399,10 @@ class AegisAgent:
                 pr_url=pr_url,
                 bounty_wallet=os.getenv("BOUNTY_WALLET"),
                 bounty_amount=float(os.getenv("BOUNTY_AMOUNT", "100.0")),
+                # Operator override: set TARGET_URL in .env to point sqlmap/nuclei
+                # at a specific endpoint. If absent, extract_context will infer it
+                # from the diff via LLM.
+                target_url=os.getenv("TARGET_URL") or None,
             )
             result = await self._live_graph.ainvoke(initial)
 

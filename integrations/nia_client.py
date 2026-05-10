@@ -77,6 +77,8 @@ async def get_waf_bypasses(tech_stack: str) -> list[str]:
         headers = {
             "Authorization": f"Bearer {api_key}",
             "Content-Type": "application/json",
+            "Accept": "application/json",
+            "User-Agent": "AegisAgent/1.0",
         }
 
         @_retry
@@ -88,7 +90,24 @@ async def get_waf_bypasses(tech_stack: str) -> list[str]:
                     json={"tech_stack": tech_stack},
                 )
                 resp.raise_for_status()
-                data = resp.json()
+                if not resp.content:
+                    logger.warning(
+                        "Nia API returned an empty body for tech_stack=%r "
+                        "(missing or invalid NIA_API_KEY?)",
+                        tech_stack,
+                    )
+                    return []
+                try:
+                    data = resp.json()
+                except Exception:
+                    logger.warning(
+                        "Nia API returned non-JSON body for tech_stack=%r "
+                        "(status=%s, body=%r)",
+                        tech_stack,
+                        resp.status_code,
+                        resp.text[:200],
+                    )
+                    return []
                 bypasses = data.get("bypasses", [])
                 if not isinstance(bypasses, list):
                     logger.warning(

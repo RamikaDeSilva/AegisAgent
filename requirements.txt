@@ -7,3 +7,5 @@ rich
 httpx
 PyGithub
 tenacity
+pytest
+pytest-asyncio

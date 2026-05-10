@@ -32,6 +32,12 @@ def make_proc(stdout=b"", stderr=b"", timeout=False, returncode=0):
     return proc
 
 
+@pytest.fixture(autouse=True)
+def mock_sqlmap_which():
+    with patch("tools.sqlmap_runner.shutil.which", return_value="/usr/bin/sqlmap"):
+        yield
+
+
 @pytest.mark.asyncio
 async def test_success_get_only():
     proc = make_proc(stdout=SQLMAP_FINDING_OUTPUT.encode())
@@ -110,6 +116,14 @@ async def test_spawn_error():
         result = await run_sqlmap(URL)
     assert result["status"] == "error"
     assert "sqlmap not found" in result["stderr"]
+
+
+@pytest.mark.asyncio
+async def test_binary_not_on_path():
+    with patch("tools.sqlmap_runner.shutil.which", return_value=None):
+        result = await run_sqlmap(URL)
+    assert result["status"] == "error"
+    assert "sqlmap not found on PATH" in result["stderr"]
 
 
 @pytest.mark.asyncio

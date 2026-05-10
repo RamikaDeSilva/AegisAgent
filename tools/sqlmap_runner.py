@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import asyncio
 import re
+import shutil
 
 from rich.console import Console
 
@@ -60,6 +61,10 @@ async def run_sqlmap(
         A dict with keys ``status``, ``target``, ``stdout``, ``stderr``,
         and optionally ``findings``.
     """
+    if not shutil.which("sqlmap"):
+        return {"status": "error", "target": target_url, "stdout": "",
+                "stderr": "sqlmap not found on PATH — install before running scans"}
+
     cmd = [
         "sqlmap", "-u", target_url,
         "--batch", "--level=3", "--risk=2", "--technique=BEUSTQ",

@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import shutil
 
 from rich.console import Console
 
@@ -53,6 +54,10 @@ async def run_nuclei(target_url: str) -> dict:
         A dict with keys ``status``, ``target``, ``stdout``, ``stderr``,
         and optionally ``findings``.
     """
+    if not shutil.which("nuclei"):
+        return {"status": "error", "target": target_url, "stdout": "",
+                "stderr": "nuclei not found on PATH — install before running scans"}
+
     cmd = [
         "nuclei", "-u", target_url,
         "-exclude-tags", "sqli",

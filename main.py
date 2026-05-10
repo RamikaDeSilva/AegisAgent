@@ -6,16 +6,29 @@ Usage:
     python main.py --mock                 # Local dev loop: skip GitHub/Greptile, use fixture state
 """
 
+from __future__ import annotations
+
 import argparse
+import asyncio
 
 from dotenv import load_dotenv
 
-from core.agent import MOCK_PR_SCAN_STATE, PRScanState
+from core.agent import MOCK_PR_SCAN_STATE, AegisAgent, PRScanState
+from core.deps import build_live_deps, build_mock_deps
 
 load_dotenv()
 
 
-def run_pr_agent(pr_url: str | None, mock: bool = False) -> None:
+async def _run(pr_url: str | None, mock: bool) -> PRScanState:
+    """Build the right deps and invoke the agent."""
+    deps = build_mock_deps() if mock else build_live_deps()
+    agent = AegisAgent(deps=deps)
+    if mock:
+        return await agent.process_pull_request(mock_state=MOCK_PR_SCAN_STATE)
+    return await agent.process_pull_request(pr_url=pr_url)
+
+
+def run_pr_agent(pr_url: str | None, mock: bool = False) -> PRScanState:
     """
     Orchestrate a full AegisAgent scan for a given Pull Request.
 
@@ -24,12 +37,12 @@ def run_pr_agent(pr_url: str | None, mock: bool = False) -> None:
       2. Fetches the PR diff via github_client.
       3. Asks Greptile whether the diff touches database code.
       4. If DB-impacted, asks Nia for WAF bypass strategies.
-      5. Runs sqlmap (and optionally nuclei) with a 60 s kill switch.
-      6. Uses the LLM to simplify the raw scan output.
-      7. Triggers an AllScale bounty payout if a vulnerability is confirmed.
+      5. Runs sqlmap and nuclei in parallel with a 60 s kill switch.
+      6. Triggers an AllScale bounty payout if a vulnerability is confirmed.
+      7. Uses the LLM to simplify the raw scan output.
       8. Edits the pending comment in-place with the final simplified report.
 
-    In mock mode (--mock), steps 1–3 are skipped; the agent loads
+    In mock mode (--mock), steps 1–4 are skipped; the agent loads
     MOCK_PR_SCAN_STATE from core.agent and starts at step 5, enabling
     rapid prompt iteration without consuming GitHub or Greptile rate limits.
 
@@ -37,8 +50,11 @@ def run_pr_agent(pr_url: str | None, mock: bool = False) -> None:
         pr_url: The full GitHub Pull Request URL (e.g.
             "https://github.com/owner/repo/pull/42"). None when mock=True.
         mock: If True, bypass network calls and inject MOCK_PR_SCAN_STATE.
+
+    Returns:
+        The final PRScanState after all nodes have run.
     """
-    pass
+    return asyncio.run(_run(pr_url, mock))
 
 
 if __name__ == "__main__":

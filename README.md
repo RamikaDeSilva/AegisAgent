@@ -14,7 +14,7 @@ vulnerabilities. Competes in three sponsor tracks:
 ```
 PR Created
  → Agent fetches diff              (integrations/github_client.py)
- → Greptile classifies: DB touched? (integrations/greptile_client.py)
+ → Greptile classifies: DB touched? (integrations/classifier_client.py)
  → If yes: Nia returns WAF bypass strategies (integrations/nia_client.py)
  → sqlmap / nuclei scan the endpoint   (tools/)
  → LLM simplifies raw scan output      (core/agent.py)
@@ -32,7 +32,7 @@ AegisAgent/
 │   └── agent.py            # Brain stream — PRScanState, AegisAgent orchestrator
 ├── integrations/
 │   ├── github_client.py    # PR diff fetch, pending comment post/edit
-│   ├── greptile_client.py  # DB-impact classification via Greptile API
+│   ├── classifier_client.py # DB-impact classification (Greptile track)
 │   ├── nia_client.py       # WAF bypass list via Nia API
 │   └── allscale_client.py  # Bounty payout trigger via AllScale API
 ├── tools/
@@ -114,7 +114,7 @@ Expected output (all keys configured correctly):
   get_pr_diff          → <N> chars
   update_pr_comment    → True
 
-=== greptile_client ===
+=== classifier_client ===
   analyze_diff_for_db_impact → True/False
 
 === nia_client ===

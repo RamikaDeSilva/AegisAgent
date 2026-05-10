@@ -45,7 +45,7 @@ class BrainDeps:
     post_pending_status: Callable[[str], Awaitable[int]]
     update_pr_comment: Callable[[int, str], Awaitable[bool]]
 
-    # Greptile (Stream 3)
+    # DB classifier — Greptile track (Stream 3)
     analyze_diff_for_db_impact: Callable[[str, str], Awaitable[bool]]
 
     # Nia (Stream 3)
@@ -123,7 +123,7 @@ def build_live_deps() -> BrainDeps:
         post_pending_status,
         update_pr_comment,
     )
-    from integrations.greptile_client import analyze_diff_for_db_impact
+    from integrations.classifier_client import analyze_diff_for_db_impact
     from integrations.nia_client import get_waf_bypasses
     from integrations.allscale_client import trigger_bounty_payout
     from tools.sqlmap_runner import run_sqlmap

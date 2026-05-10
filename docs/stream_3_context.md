@@ -10,7 +10,7 @@ track integrations (Greptile, Nia, AllScale).
 | File                               | Purpose                                   |
 |------------------------------------|-------------------------------------------|
 | `integrations/github_client.py`    | PR diff fetch, comment post/edit          |
-| `integrations/greptile_client.py`  | DB-impact classification via Greptile API |
+| `integrations/classifier_client.py` | DB-impact classification (Greptile track) |
 | `integrations/nia_client.py`       | WAF bypass list via Nia API               |
 | `integrations/allscale_client.py`  | Bounty payout trigger via AllScale API    |
 | `integrations/__init__.py`         | Package init (keep empty)                 |
@@ -78,7 +78,7 @@ async def post_pr_comment(pr_url: str, comment_body: str) -> bool:
 - Result: one comment on the PR that evolves from "analyzing..." to the
   final report. Judges and developers see a clean, responsive bot.
 
-### `integrations/greptile_client.py`
+### `integrations/classifier_client.py`
 
 ```python
 async def analyze_diff_for_db_impact(repo_name: str, diff_text: str) -> bool:
@@ -86,7 +86,9 @@ async def analyze_diff_for_db_impact(repo_name: str, diff_text: str) -> bool:
     Return True if the diff touches database code (raw SQL, ORM queries,
     migrations, etc.), False otherwise.
 
-    Uses the Greptile API. Reads GREPTILE_API_KEY from the environment.
+    Greptile track: uses OpenAI gpt-4o-mini as fallback (Greptile query
+    endpoint returned 404 during integration). Reads OPENAI_API_KEY from
+    the environment.
     """
 ```
 

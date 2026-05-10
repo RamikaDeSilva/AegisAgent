@@ -59,18 +59,20 @@ You own this model. You may add fields freely — but only you may edit it.
 
 ---
 
-## Orchestration Contract (7-Step Flow)
+## Orchestration Contract (8-Step Flow)
 
 ```
 1. post_pending_status(pr_url)          → store comment_id in state
 2. get_pr_diff(pr_url)                  → store diff_text in state
 3. analyze_diff_for_db_impact(...)      → store db_impacted in state
    └─ if False: update_pr_comment("No DB impact found.") and exit
-4. get_waf_bypasses(tech_stack)         → store waf_bypasses in state
-5. run_sqlmap(target_url, ...)          → store sqlmap_result in state
+4. extract_context(diff_text)           → store tech_stack + target_url in state
+   (LLM-powered; skipped if TARGET_URL env var already set)
+5. get_waf_bypasses(tech_stack)         → store waf_bypasses in state
+6. run_sqlmap(target_url, ...)          → store sqlmap_result in state
    run_nuclei(target_url)               → store nuclei_result in state
-6. trigger_bounty_payout(...)           → store bounty_paid in state
-7. simplify_vulnerability_report(...)   → store simplified_report in state
+7. trigger_bounty_payout(...)           → store bounty_paid in state
+8. simplify_vulnerability_report(...)   → store simplified_report in state
    update_pr_comment(comment_id, simplified_report)
 ```
 

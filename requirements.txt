@@ -5,7 +5,6 @@ pydantic
 python-dotenv
 rich
 httpx
-PyGithub
 tenacity
 pytest
 pytest-asyncio

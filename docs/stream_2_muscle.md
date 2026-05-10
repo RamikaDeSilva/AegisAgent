@@ -57,8 +57,8 @@ Build safe, async `asyncio.create_subprocess_exec` wrappers around `sqlmap`
 and `nuclei`. Each wrapper must:
 
 1. Spawn the subprocess asynchronously.
-2. Enforce a hard timeout via `asyncio.wait_for` — 1800 s for `sqlmap`, 120 s for `nuclei`.
-3. On timeout (1800 s for sqlmap, 120 s for nuclei): terminate the process, log the result,
+2. Enforce a hard timeout via `asyncio.wait_for` — 60 s for `sqlmap`, 120 s for `nuclei`.
+3. On timeout (60 s for sqlmap, 120 s for nuclei): terminate the process, log the result,
   and return a structured error dict — never raise an exception.
 4. On success: parse stdout and return a structured dict.
 5. Log all meaningful events using `rich` (imported from `rich`).
@@ -154,7 +154,7 @@ categories like `auth`, `default-logins`, `ssl`, `dns`, `network`, and
     "status": "timeout",
     "target": target_url,
     "stdout": "",
-    "stderr": "killed after 1800s",   # "killed after 120s" for nuclei
+    "stderr": "killed after 60s",   # "killed after 120s" for nuclei
 }
 ```
 
@@ -216,7 +216,7 @@ async def run_sqlmap(
         return {"status": "error", "target": target_url, "stdout": "", "stderr": str(exc)}
 
     try:
-        stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=1800)
+        stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=60)
         return {"status": "success", "target": target_url,
                 "stdout": stdout.decode(), "stderr": stderr.decode(), "findings": [...]}
     except asyncio.TimeoutError:
@@ -227,7 +227,7 @@ async def run_sqlmap(
             proc.kill()
             await proc.wait()
         console.log(f"[yellow]sqlmap timed out on {target_url} — scan inconclusive[/yellow]")
-        return {"status": "timeout", "target": target_url, "stdout": "", "stderr": "killed after 1800s"}
+        return {"status": "timeout", "target": target_url, "stdout": "", "stderr": "killed after 60s"}
     except Exception as exc:
         return {"status": "error", "target": target_url, "stdout": "", "stderr": str(exc)}
 ```
@@ -240,7 +240,7 @@ skip this — a hanging scan will block the GitHub Action indefinitely.
 ## Definition of Done
 
 - Both `run_sqlmap` and `run_nuclei` are fully async (no `subprocess.run`).
-- `sqlmap` uses `asyncio.wait_for(timeout=1800)`; `nuclei` uses `asyncio.wait_for(timeout=120)`.
+- `sqlmap` uses `asyncio.wait_for(timeout=60)`; `nuclei` uses `asyncio.wait_for(timeout=120)`.
 - `asyncio.create_subprocess_exec` spawn failures are caught and returned as `{"status": "error", ...}`.
 - On `TimeoutError`: process is terminated/killed, `rich` logs the event,
 and `{"status": "timeout", ...}` is returned.

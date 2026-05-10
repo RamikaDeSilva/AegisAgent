@@ -178,6 +178,12 @@ async def update_pr_comment(comment_id: int, comment_body: str) -> bool:
     Returns:
         True if the update succeeded, False otherwise.
     """
+    if comment_id == 0:
+        logger.warning(
+            "update_pr_comment called with comment_id=0; "
+            "post_pending_status likely failed — skipping update"
+        )
+        return False
     try:
         cached = _comment_repo_cache.get(comment_id)
         if cached is None:

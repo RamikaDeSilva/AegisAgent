@@ -26,7 +26,7 @@ async def run_sqlmap(
     Run sqlmap against the given URL and return structured results.
 
     Spawns sqlmap as an async subprocess via ``asyncio.create_subprocess_exec``
-    and enforces a hard 1800-second timeout with ``asyncio.wait_for``. If the
+    and enforces a hard 60-second timeout with ``asyncio.wait_for``. If the
     process does not complete in time it is terminated/killed and a timeout
     dict is returned — never raises.
 
@@ -38,7 +38,7 @@ async def run_sqlmap(
 
         Timeout (kill switch triggered):
             {"status": "timeout", "target": target_url,
-             "stdout": "", "stderr": "killed after 1800s"}
+             "stdout": "", "stderr": "killed after 60s"}
 
         Error:
             {"status": "error", "target": target_url,
@@ -84,14 +84,22 @@ async def run_sqlmap(
         return {"status": "error", "target": target_url, "stdout": "", "stderr": str(exc)}
 
     try:
-        stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=1800)
+        stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=60)
         raw = stdout.decode()
+        findings = _parse_sqlmap_findings(raw)
+        if proc.returncode != 0 and not findings:
+            return {
+                "status": "error",
+                "target": target_url,
+                "stdout": raw,
+                "stderr": stderr.decode(),
+            }
         return {
             "status": "success",
             "target": target_url,
             "stdout": raw,
             "stderr": stderr.decode(),
-            "findings": _parse_sqlmap_findings(raw),
+            "findings": findings,
         }
     except asyncio.TimeoutError:
         proc.terminate()
@@ -101,7 +109,7 @@ async def run_sqlmap(
             proc.kill()
             await proc.wait()
         console.log(f"[yellow]sqlmap timed out on {target_url} — scan inconclusive[/yellow]")
-        return {"status": "timeout", "target": target_url, "stdout": "", "stderr": "killed after 1800s"}
+        return {"status": "timeout", "target": target_url, "stdout": "", "stderr": "killed after 60s"}
     except Exception as exc:
         return {"status": "error", "target": target_url, "stdout": "", "stderr": str(exc)}
 

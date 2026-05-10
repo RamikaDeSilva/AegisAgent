@@ -31,6 +31,15 @@ _GREPTILE_API = "https://api.greptile.com/v2"
 # ---------------------------------------------------------------------------
 
 
+def _greptile_headers() -> dict[str, str]:
+    """Both Authorization and X-Github-Token are required by the Greptile API."""
+    return {
+        "Authorization": f"Bearer {os.getenv('GREPTILE_API_KEY', '')}",
+        "X-Github-Token": os.getenv("GITHUB_TOKEN", ""),
+        "Content-Type": "application/json",
+    }
+
+
 def _is_retryable(exc: BaseException) -> bool:
     if isinstance(exc, httpx.HTTPStatusError):
         return exc.response.status_code in {429, 502, 503}
@@ -43,6 +52,41 @@ _retry = retry(
     stop=stop_after_attempt(3),
     reraise=True,
 )
+
+
+async def _ensure_repo_indexed(repo_name: str) -> None:
+    """
+    Submit the repository for indexing if it hasn't been indexed yet.
+
+    Indexing is idempotent — calling this on an already-indexed repo is safe
+    and returns quickly. On first run it kicks off async indexing (3-5 min for
+    small repos); subsequent calls are instant because Greptile caches the index.
+    """
+    try:
+        @_retry
+        async def _index() -> None:
+            async with httpx.AsyncClient(timeout=30) as client:
+                resp = await client.post(
+                    f"{_GREPTILE_API}/repositories",
+                    headers=_greptile_headers(),
+                    json={
+                        "remote": "github",
+                        "repository": repo_name,
+                        "branch": "main",
+                    },
+                )
+                # 200 = started / already processing; anything else is unexpected
+                if resp.status_code not in {200, 201}:
+                    logger.warning(
+                        "_ensure_repo_indexed got status %s for %s: %s",
+                        resp.status_code,
+                        repo_name,
+                        resp.text[:200],
+                    )
+
+        await _index()
+    except Exception:
+        logger.exception("_ensure_repo_indexed failed for repo=%s", repo_name)
 
 
 # ---------------------------------------------------------------------------
@@ -59,7 +103,7 @@ async def analyze_diff_for_db_impact(repo_name: str, diff_text: str) -> bool:
     files, query-builder logic, etc. Returns False if the diff is unrelated to
     the database layer.
 
-    Reads ``GREPTILE_API_KEY`` from the environment.
+    Reads ``GREPTILE_API_KEY`` and ``GITHUB_TOKEN`` from the environment.
 
     Args:
         repo_name: The GitHub repo in ``owner/repo`` format (e.g.
@@ -71,15 +115,13 @@ async def analyze_diff_for_db_impact(repo_name: str, diff_text: str) -> bool:
         False otherwise.
     """
     try:
-        api_key = os.getenv("GREPTILE_API_KEY", "")
-        headers = {
-            "Authorization": f"Bearer {api_key}",
-            "Content-Type": "application/json",
-        }
+        # Greptile requires the repo to be indexed before it can be queried.
+        # This call is idempotent — fast on subsequent runs once the index exists.
+        await _ensure_repo_indexed(repo_name)
 
-        # Strict structured prompt: instructs the model to reply with exactly
-        # one word so parsing is deterministic and cannot false-positive on
-        # negative answers that contain DB keywords (e.g. "No sql found").
+        # Strict structured prompt: forces a single-word YES/NO response so
+        # parsing is deterministic and cannot false-positive on negative answers
+        # that happen to contain DB keywords (e.g. "No sql changes found").
         prompt = (
             "You are a security code reviewer. "
             "Does the following git diff touch database code "
@@ -100,7 +142,7 @@ async def analyze_diff_for_db_impact(repo_name: str, diff_text: str) -> bool:
             async with httpx.AsyncClient(timeout=60) as client:
                 resp = await client.post(
                     f"{_GREPTILE_API}/query",
-                    headers=headers,
+                    headers=_greptile_headers(),
                     json=payload,
                 )
                 resp.raise_for_status()

@@ -7,11 +7,13 @@ async, timeout-enforced Python functions.
 
 ## Files You May Edit
 
-| File                    | Purpose                          |
-|-------------------------|----------------------------------|
-| `tools/sqlmap_runner.py`  | Async wrapper around `sqlmap`  |
-| `tools/nuclei_runner.py`  | Async wrapper around `nuclei`  |
-| `tools/__init__.py`       | Package init (keep empty)      |
+
+| File                     | Purpose                       |
+| ------------------------ | ----------------------------- |
+| `tools/sqlmap_runner.py` | Async wrapper around `sqlmap` |
+| `tools/nuclei_runner.py` | Async wrapper around `nuclei` |
+| `tools/__init__.py`      | Package init (keep empty)     |
+
 
 ## Files You Must NOT Edit
 
@@ -57,7 +59,7 @@ and `nuclei`. Each wrapper must:
 1. Spawn the subprocess asynchronously.
 2. Enforce a hard timeout via `asyncio.wait_for` — 1800 s for `sqlmap`, 120 s for `nuclei`.
 3. On timeout (1800 s for sqlmap, 120 s for nuclei): terminate the process, log the result,
-   and return a structured error dict — never raise an exception.
+  and return a structured error dict — never raise an exception.
 4. On success: parse stdout and return a structured dict.
 5. Log all meaningful events using `rich` (imported from `rich`).
 
@@ -65,7 +67,7 @@ and `nuclei`. Each wrapper must:
 
 ## Public Interface Contract
 
-The Brain stream calls your functions with these exact signatures. Do not
+The Brain stream calls your functions with these exact signatures. Do not  
 change the signatures without coordinating with the Brain owner.
 
 ```python
@@ -93,12 +95,18 @@ async def run_nuclei(target_url: str) -> dict:
 ```
 sqlmap -u <url> --batch --level=3 --risk=2 --technique=BEUSTQ
        [--tamper <script>]
+       [--data <post_data>]
+       [--cookie <cookie>]
+       [-H "Key: Value" ...]
 ```
 
 - `--batch` — non-interactive, no prompts
 - `--level=3 --risk=2` — broad coverage, not destructive
 - `--technique=BEUSTQ` — all 6 SQLi techniques (Boolean, Error, Union, Stacked, Time, Query)
 - `--tamper <script>` — injected only when `tamper_script` is not `None`
+- `--data <post_data>` — injected only when `post_data` is not `None`; switches sqlmap to POST mode
+- `--cookie <cookie>` — injected only when `cookie` is not `None`
+- `-H "Key: Value"` — one flag per entry in `headers`; injected only when `headers` is not `None`
 
 **nuclei:**
 
@@ -177,18 +185,40 @@ from rich.console import Console
 
 console = Console()
 
-async def run_sqlmap(target_url: str, tamper_script: str | None = None) -> dict:
-    proc = await asyncio.create_subprocess_exec(
-        "sqlmap", "-u", target_url, "--batch", "--level=3", "--risk=2",
-        "--technique=BEUSTQ",
-        *(["--tamper", tamper_script] if tamper_script else []),
-        stdout=asyncio.subprocess.PIPE,
-        stderr=asyncio.subprocess.PIPE,
-    )
+async def run_sqlmap(
+    target_url: str,
+    tamper_script: str | None = None,
+    post_data: str | None = None,
+    cookie: str | None = None,
+    headers: dict[str, str] | None = None,
+) -> dict:
+    cmd = [
+        "sqlmap", "-u", target_url,
+        "--batch", "--level=3", "--risk=2", "--technique=BEUSTQ",
+    ]
+    if tamper_script:
+        cmd += ["--tamper", tamper_script]
+    if post_data:
+        cmd += ["--data", post_data]
+    if cookie:
+        cmd += ["--cookie", cookie]
+    if headers:
+        for key, value in headers.items():
+            cmd += ["-H", f"{key}: {value}"]
+
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            *cmd,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+    except Exception as exc:
+        return {"status": "error", "target": target_url, "stdout": "", "stderr": str(exc)}
+
     try:
         stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=1800)
         return {"status": "success", "target": target_url,
-                "stdout": stdout.decode(), "stderr": stderr.decode(), "findings": []}
+                "stdout": stdout.decode(), "stderr": stderr.decode(), "findings": [...]}
     except asyncio.TimeoutError:
         proc.terminate()
         try:
@@ -198,6 +228,8 @@ async def run_sqlmap(target_url: str, tamper_script: str | None = None) -> dict:
             await proc.wait()
         console.log(f"[yellow]sqlmap timed out on {target_url} — scan inconclusive[/yellow]")
         return {"status": "timeout", "target": target_url, "stdout": "", "stderr": "killed after 1800s"}
+    except Exception as exc:
+        return {"status": "error", "target": target_url, "stdout": "", "stderr": str(exc)}
 ```
 
 Apply the same pattern to `run_nuclei` using the nuclei flags above. Do not
@@ -207,14 +239,17 @@ skip this — a hanging scan will block the GitHub Action indefinitely.
 
 ## Definition of Done
 
-- [ ] Both `run_sqlmap` and `run_nuclei` are fully async (no `subprocess.run`).
-- [ ] `sqlmap` uses `asyncio.wait_for(timeout=1800)`; `nuclei` uses `asyncio.wait_for(timeout=120)`.
-- [ ] On `TimeoutError`: process is terminated/killed, `rich` logs the event,
-      and `{"status": "timeout", ...}` is returned.
-- [ ] All three return-dict shapes (`success`, `timeout`, `error`) are handled.
-- [ ] No exceptions bubble up to the Brain stream under any circumstances.
-- [ ] `sqlmap` is invoked with `--level=3 --risk=2 --technique=BEUSTQ`.
-- [ ] `nuclei` is invoked with `-exclude-tags sqli` on every call — no exceptions.
-- [ ] `nuclei` is invoked with `-json` and no `-tags` whitelist.
-- [ ] `findings` entries follow the per-tool typed shapes defined above.
-- [ ] `tools/__init__.py` remains empty (imports are done explicitly by Brain).
+- Both `run_sqlmap` and `run_nuclei` are fully async (no `subprocess.run`).
+- `sqlmap` uses `asyncio.wait_for(timeout=1800)`; `nuclei` uses `asyncio.wait_for(timeout=120)`.
+- `asyncio.create_subprocess_exec` spawn failures are caught and returned as `{"status": "error", ...}`.
+- On `TimeoutError`: process is terminated/killed, `rich` logs the event,
+and `{"status": "timeout", ...}` is returned.
+- All three return-dict shapes (`success`, `timeout`, `error`) are handled.
+- No exceptions bubble up to the Brain stream under any circumstances.
+- `sqlmap` is invoked with `--level=3 --risk=2 --technique=BEUSTQ`.
+- `run_sqlmap` accepts `post_data`, `cookie`, `headers` (all optional); maps to `--data`, `--cookie`, `-H`.
+- `nuclei` is invoked with `-exclude-tags sqli` on every call — no exceptions.
+- `nuclei` is invoked with `-json` and no `-tags` whitelist.
+- `findings` entries follow the per-tool typed shapes defined above.
+- `tools/__init__.py` remains empty (imports are done explicitly by Brain).
+

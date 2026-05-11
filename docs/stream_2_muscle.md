@@ -111,11 +111,11 @@ sqlmap -u <url> --batch --level=3 --risk=2 --technique=BEUSTQ
 **nuclei:**
 
 ```
-nuclei -u <url> -exclude-tags sqli -json
+nuclei -u <url> -exclude-tags sqli -jsonl
 ```
 
 - `-exclude-tags sqli` — hard exclusion; never duplicates sqlmap's work
-- `-json` — structured output, easier to parse into `findings`
+- `-jsonl` — newline-delimited JSON output (renamed from `-json` in nuclei v3+), easier to parse into `findings`
 
 No `-tags` whitelist is applied. nuclei runs its full template library so that
 categories like `auth`, `default-logins`, `ssl`, `dns`, `network`, and
@@ -249,7 +249,7 @@ and `{"status": "timeout", ...}` is returned.
 - `sqlmap` is invoked with `--level=3 --risk=2 --technique=BEUSTQ`.
 - `run_sqlmap` accepts `post_data`, `cookie`, `headers` (all optional); maps to `--data`, `--cookie`, `-H`.
 - `nuclei` is invoked with `-exclude-tags sqli` on every call — no exceptions.
-- `nuclei` is invoked with `-json` and no `-tags` whitelist.
+- `nuclei` is invoked with `-jsonl` and no `-tags` whitelist.
 - `findings` entries follow the per-tool typed shapes defined above.
 - `tools/__init__.py` remains empty (imports are done explicitly by Brain).
 

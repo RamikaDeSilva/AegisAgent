@@ -61,7 +61,7 @@ async def run_nuclei(target_url: str) -> dict:
     cmd = [
         "nuclei", "-u", target_url,
         "-exclude-tags", "sqli",
-        "-json",
+        "-jsonl",
     ]
 
     try:

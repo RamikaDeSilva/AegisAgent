@@ -270,10 +270,9 @@ class AegisAgent:
                 updates["tech_stack"] = str(data["tech_stack"])
             if not state.target_url and data.get("target_url"):
                 updates["target_url"] = str(data["target_url"])
-        except Exception:
-            logger.exception(
-                "Context extraction failed for %s; continuing with partial state.",
-                state.repo_name,
+        except Exception as exc:
+            self._console.log(
+                f"[yellow]extract_context failed for {state.repo_name}: {exc} — continuing with partial state[/yellow]"
             )
         return updates
 

@@ -41,6 +41,12 @@ def make_proc(stdout=b"", stderr=b"", timeout=False):
     return proc
 
 
+@pytest.fixture(autouse=True)
+def mock_nuclei_which():
+    with patch("tools.nuclei_runner.shutil.which", return_value="/usr/local/bin/nuclei"):
+        yield
+
+
 @pytest.mark.asyncio
 async def test_success_findings_parsed():
     stdout = (NUCLEI_LINE_1 + "\n" + NUCLEI_LINE_2 + "\n").encode()
@@ -97,6 +103,14 @@ async def test_spawn_error():
         result = await run_nuclei(URL)
     assert result["status"] == "error"
     assert "nuclei not found" in result["stderr"]
+
+
+@pytest.mark.asyncio
+async def test_binary_not_on_path():
+    with patch("tools.nuclei_runner.shutil.which", return_value=None):
+        result = await run_nuclei(URL)
+    assert result["status"] == "error"
+    assert "nuclei not found on PATH" in result["stderr"]
 
 
 @pytest.mark.asyncio

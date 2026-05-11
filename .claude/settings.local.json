@@ -4,7 +4,9 @@
       "WebSearch",
       "WebFetch(domain:github.com)",
       "WebFetch(domain:docs.projectdiscovery.io)",
-      "Bash(pip3 install *)"
+      "Bash(pip3 install *)",
+      "Bash(sqlmap --version)",
+      "Bash(nuclei --version)"
     ]
   }
 }
